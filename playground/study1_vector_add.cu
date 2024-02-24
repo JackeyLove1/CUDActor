@@ -50,6 +50,16 @@ cudaError_t TestCudaDeviceProp() {
         RETURN_IF_ERROR(cudaGetDeviceProperties(&prop, 0));
         LOG(INFO) << "Cuda device name: " << prop.name;
     }
+    int dev = 0;
+    cudaDeviceProp devProp;
+    RETURN_IF_ERROR(cudaGetDeviceProperties(&devProp, dev));
+    std::cout << "使用GPU device " << dev << ": " << devProp.name << std::endl;
+    std::cout << "SM的数量：" << devProp.multiProcessorCount << std::endl;
+    std::cout << "每个线程块的共享内存大小：" << devProp.sharedMemPerBlock / 1024.0 << " KB" << std::endl;
+    std::cout << "每个线程块的最大线程数：" << devProp.maxThreadsPerBlock << std::endl;
+    std::cout << "每个EM的最大线程数：" << devProp.maxThreadsPerMultiProcessor << std::endl;
+    std::cout << "每个SM的最大线程束数：" << devProp.maxThreadsPerMultiProcessor / 32 << std::endl;
+
     return cudaSuccess;
 }
 
@@ -90,6 +100,14 @@ __global__ void vector_add2(T *out, T *a, T *b, int n) {
     while (tid < n) {
         out[tid] = a[tid] + b[tid];
         tid += blockDim.x + gridDim.x;
+    }
+}
+
+__global__ void vector_add3(float *a, float *b, float *c, int n) {
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int i = index; i < n; i += stride) {
+        c[i] = a[i] + b[i];
     }
 }
 
@@ -142,12 +160,92 @@ cudaError_t TestCudaVectorAdd() {
     return cudaSuccess;
 }
 
+constexpr int threadsPerBlock = 256;
+
+__global__ void dot(float *a, float *b, float *c) {
+    __shared__ float cache[threadsPerBlock];
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    int cacheIndex = threadIdx.x;
+    float temp = 0;
+    while (tid < N) {
+        temp += a[tid] * b[tid];
+        tid += blockDim.x * gridDim.x;
+    }
+    cache[cacheIndex] = temp;
+
+    __syncthreads();
+
+    int i = blockDim.x / 2;
+    while (i != 0) {
+        if (cacheIndex < i) {
+            cache[cacheIndex] += cache[cacheIndex + 1];
+            __syncthreads();
+        }
+        i /= 2;
+    }
+    if (cacheIndex == 0) {
+        c[blockIdx.x] = cache[0];
+    }
+}
+
+#define DIM 1024
+
+__global__ void blend_kernel(float *outSrc, const float *inSrc) {
+    int x = threadIdx.x + blockIdx.x * blockDim.x;
+    int y = threadIdx.y + blockIdx.y * blockDim.y;
+    int offset = x + y * blockDim.x * gridDim.x;
+
+    int left = offset - 1;
+    int right = offset + 1;
+    if (x == 0) left++;
+    if (x == DIM - 1) right++;
+
+    int top = offset - DIM;
+    int bottom = offset + DIM;
+    if (y == 0) top += DIM;
+    if (y == DIM - 1) bottom -= DIM;
+}
+
+__global__ void kernel1(uchar4 *ptr) {
+    int x = threadIdx.x + blockIdx.x * blockDim.x;
+    int y = threadIdx.y + blockIdx.y * blockDim.y;
+    int offset = x + y * blockDim.x * gridDim.x;
+
+    float fx = x / (float) DIM - 0.5f;
+    float fy = y / (float) DIM - 0.5f;
+    unsigned char green = 128 + 127 * sin(abs(fx * 100) - abs(fy * 100));
+}
+
+__global__ void histo_kernel(unsigned char *buffer, long size, unsigned int *histo) {
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+    while (i < size) {
+        atomicAdd(&(histo[buffer[i]]), 1);
+        i += stride;
+    }
+}
+
+__global__ void histo_kernel2(unsigned char *buffer, long size, unsigned int *histo) {
+    __shared__ unsigned int temp[256];
+    temp[threadIdx.x] = 0;
+    __syncthreads();
+
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    int offset = blockDim.x * gridDim.x;
+    while (i < size) {
+        atomicAdd(&(temp[buffer[i]]), 1);
+        i += offset;
+    }
+
+    __syncthreads();
+    atomicAdd(&(histo[buffer[threadIdx.x]]), temp[threadIdx.x]);
+}
 
 int main() {
 
     // TestCudaDeviceCount();
 
-    // TestCudaDeviceProp();
+    TestCudaDeviceProp();
 
     TestCudaVectorAdd();
 
