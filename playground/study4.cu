@@ -201,6 +201,38 @@ cudaError_t TestPinnedMemory(){
     return cudaSuccess;
 }
 
+// Spaxy
+__global__ void spaxy(int n, int a, float *x, float *y){
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < n) y[index] = a * x[index] + x[index];
+}
+
+cudaError_t TestSpaxy(){
+    constexpr int N = 1 << 20;
+    constexpr int block_size = 256;
+    constexpr int grid_size = static_cast<int>((N + block_size -  1) / block_size);
+    constexpr int a = 6;
+    float *x, *y, *d_x, *d_y;
+    cudaMallocHost(&x, N * sizeof (float ));
+    cudaMallocHost(&y, N * sizeof (float ));
+    cudaMalloc(&d_x, N * sizeof(float ));
+    cudaMalloc(&d_y, N * sizeof(float ));
+    memset(x, 0, N);
+    memset(y, 0, N);
+    cudaMemcpy(d_x, x, N, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_y, y, N, cudaMemcpyHostToDevice);
+    spaxy<<<grid_size, block_size>>>(N, 6, d_x, d_y);
+    cudaMemcpy(x, d_x, N, cudaMemcpyDeviceToHost);
+    cudaMemcpy(y, d_y, N, cudaMemcpyDeviceToHost);
+    cudaFree(d_x);
+    cudaFree(d_y);
+    cudaFreeHost(x);
+    cudaFreeHost(y);
+    return cudaSuccess;
+}
+
+
+
 int main() {
     TestCudaStream();
 
@@ -209,4 +241,6 @@ int main() {
     TestReverse();
 
     TestPinnedMemory();
+
+    TestSpaxy();
 }
